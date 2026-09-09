@@ -124,8 +124,8 @@ def _component_polygons(component: Any, layer: tuple[int, int]):
     return polygons
 
 
-def _four_port_design(case: DifferentialCase):
-    """Extrude the referenced layer stack and guides through the x boundaries."""
+def _ported_design(case: DifferentialCase):
+    """Extrude a referenced layer stack and its guides through the x boundaries."""
     from beamz import Design, Material, Polygon, Rectangle, µm
 
     component = generate_layout(case)
@@ -184,9 +184,7 @@ def _four_port_design(case: DifferentialCase):
         elif orientation == 0:
             position, extension_width = (x, y - width / 2), extension
         else:
-            raise ValueError(
-                f"unsupported four-port orientation for port orientation {orientation}"
-            )
+            raise ValueError(f"unsupported port orientation {orientation}")
         design += Rectangle(
             position=(*position, core_z),
             width=extension_width,
@@ -225,7 +223,7 @@ def build_four_port_simulation(
     if float(wavelength_span_nm) not in protocol["wavelength_spans_nm"]:
         raise ValueError(f"unsupported paper wavelength span {wavelength_span_nm}")
 
-    design = _four_port_design(case)
+    design = _ported_design(case)
     bounds = domain_bounds_um(case)
     core = case.geometry["layers"]["core"]
     z_center = (
