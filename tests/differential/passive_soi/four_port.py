@@ -124,8 +124,8 @@ def _component_polygons(component: Any, layer: tuple[int, int]):
     return polygons
 
 
-def _four_port_design(case: DifferentialCase):
-    """Extrude the referenced layer stack and guides through the x boundaries."""
+def _ported_design(case: DifferentialCase):
+    """Extrude a referenced layer stack and its guides through the x boundaries."""
     from beamz import Design, Material, Polygon, Rectangle, µm
 
     component = generate_layout(case)
@@ -140,6 +140,17 @@ def _four_port_design(case: DifferentialCase):
         depth=depth_um * µm,
         background=silica,
     )
+
+    if "top_cladding" in case.geometry:
+        cladding = case.geometry["top_cladding"]
+        cladding_z = float(cladding["zmin_um"])
+        design += Rectangle(
+            position=(0.0, 0.0, (cladding_z - bounds["z"][0]) * µm),
+            width=width_um * µm,
+            height=height_um * µm,
+            depth=(bounds["z"][1] - cladding_z) * µm,
+            material=Material(case.materials[cladding["material"]] ** 2),
+        )
 
     for layer in case.geometry["layers"].values():
         thickness = float(layer["thickness_m"])
@@ -173,9 +184,7 @@ def _four_port_design(case: DifferentialCase):
         elif orientation == 0:
             position, extension_width = (x, y - width / 2), extension
         else:
-            raise ValueError(
-                f"unsupported four-port orientation for port orientation {orientation}"
-            )
+            raise ValueError(f"unsupported port orientation {orientation}")
         design += Rectangle(
             position=(*position, core_z),
             width=extension_width,
@@ -214,7 +223,7 @@ def build_four_port_simulation(
     if float(wavelength_span_nm) not in protocol["wavelength_spans_nm"]:
         raise ValueError(f"unsupported paper wavelength span {wavelength_span_nm}")
 
-    design = _four_port_design(case)
+    design = _ported_design(case)
     bounds = domain_bounds_um(case)
     core = case.geometry["layers"]["core"]
     z_center = (
@@ -230,7 +239,12 @@ def build_four_port_simulation(
         max_total_cells=None,
     )
 
-    mode_spec = ModeSpec(polarization="te")
+    source_name = protocol.get("source_port", "o1")
+    mode_candidates = int(protocol.get("mode_candidates", 1))
+    mode_spec = ModeSpec(
+        polarization=protocol.get("source_polarization", "te"),
+        num_modes=mode_candidates,
+    )
     transverse_span = float(protocol["beamz_port_transverse_span_um"]) * µm
     z_span = 2.0 * µm
     ports = tuple(
@@ -249,12 +263,16 @@ def build_four_port_simulation(
                 inward_offset_um=0.5,
                 z_center=z_center,
             )[1],
-            mode_spec=mode_spec,
+            mode_spec=(
+                mode_spec
+                if name == source_name
+                else ModeSpec(polarization="te", num_modes=mode_candidates)
+            ),
         )
         for name in case.geometry["ports"]
     )
     source_center, source_direction = port_center_and_direction(
-        case, "o1", inward_offset_um=0.0, z_center=z_center
+        case, source_name, inward_offset_um=0.0, z_center=z_center
     )
     source_port = Port(
         center=source_center,
@@ -357,6 +375,31 @@ def _save_four_port_artifacts(
     }
     for (output, source), values in scattering.s_matrix.items():
         arrays[f"S_{output}_{source}"] = np.asarray(values)
+    for port_name, wave in scattering.diagnostics["waves"].items():
+        for diagnostic_name in (
+            "P_plus",
+            "P_minus",
+            "mode_neff",
+            "projection_residual",
+            "condition_number",
+            "projected_signed_power",
+        ):
+            if diagnostic_name in wave:
+                arrays[f"diagnostic_{port_name}__{diagnostic_name}"] = np.asarray(
+                    wave[diagnostic_name]
+                )
+    for port_name, flux in scattering.diagnostics["monitor_flux_checks"].items():
+        for diagnostic_name in (
+            "monitor_flux",
+            "P_modal_sum",
+            "P_modal_net",
+            "P_selected",
+            "P_rejected",
+            "P_selected_modal_net",
+        ):
+            arrays[f"flux_{port_name}__{diagnostic_name}"] = np.asarray(
+                flux[diagnostic_name]
+            )
     for monitor_name, monitor_results in results.monitors.items():
         arrays[f"{monitor_name}__frequencies_hz"] = np.asarray(
             monitor_results.get_dft_frequencies()
